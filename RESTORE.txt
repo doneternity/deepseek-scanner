@@ -1,0 +1,49 @@
+================================================================================
+DEEPSEEK SCANNER - RESTORE ON A NEW MACHINE
+================================================================================
+
+1. INSTALL PACKAGES
+   sudo apt install -y python3 python3-pip git
+   pip3 install --user --break-system-packages -r requirements.txt
+   (optional, for tests) pip3 install --user --break-system-packages pytest
+
+2. CLONE AND CONFIGURE
+   git clone <your-private-repo-url> deepseek-scanner
+   cd deepseek-scanner
+   cp config.toml.example config.toml
+   -> edit config.toml and add fresh credentials:
+      github_tokens, discord_webhook_url, and optionally kaggle creds
+
+   If you also restore the encrypted state archive (step 3), it already
+   contains your old config.toml - then skip the cp and just review it,
+   but rotate the old tokens afterwards.
+
+3. RESTORE STATE (encrypted backup, optional but recommended)
+   gpg -d scanner-state-backup.tar.gz.gpg > /tmp/scanner-state.tar.gz
+   tar xzf /tmp/scanner-state.tar.gz -C /home/$USER/scanner/deepseek-scanner
+   This restores findings.db (all previous findings and dedupe history),
+   config.toml, logs and the Discord import report.
+   Secure-delete the temporary tar afterwards: shred -u /tmp/scanner-state.tar.gz
+
+4. INSTALL THE BACKGROUND SERVICE
+   mkdir -p ~/.config/systemd/user
+   cp deploy/scanner-user.service ~/.config/systemd/user/deepseek-scanner.service
+   systemctl --user daemon-reload
+   systemctl --user enable --now deepseek-scanner
+   loginctl enable-linger $USER
+   (adjust WorkingDirectory in the unit if the project path differs)
+
+5. VERIFY
+   python3 -m pytest -q                       # expect all tests to pass
+   systemctl --user status deepseek-scanner   # active (running)
+   tail -f scanner.log                        # activity + 5-min heartbeats
+   python3 main.py --stats                    # findings summary
+
+6. SECURITY - ROTATE EVERYTHING THAT WAS EXPOSED
+   - GitHub tokens (they appeared in chat and in local files)
+   - Discord bot token used for the history import
+   - Discord webhook URL
+   - Kaggle API key (if configured)
+   Create the replacements on the new machine and delete the old ones.
+
+================================================================================

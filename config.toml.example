@@ -1,0 +1,277 @@
+github_tokens = []
+discord_webhook_url = ""
+key_regex = 'sk-[a-f0-9]{32}\b'
+min_balance_eur = 0.0
+notify_all_valid = false
+revalidate_below_threshold_hours = 48
+
+[fx]
+api_url = "https://open.er-api.com/v6/latest/USD"
+ttl_seconds = 21600
+
+[search]
+queries = [
+  "DEEPSEEK_API_KEY",
+  "deepseek_api_key",
+  "DEEPSEEK_APIKEY",
+  "deepseek_apikey",
+  "DEEPSEEK_KEY",
+  "deepseek_key",
+  "deepseekKey",
+  "ds_api_key",
+  "DEEPSEEK_SECRET",
+  "deepseek_token",
+  '"api.deepseek.com" "sk-"',
+  '"api.deepseek.com" "Bearer"',
+  '"api.deepseek.com" "Authorization"',
+  '"deepseek" "sk-"',
+  '"api.deepseek.com" "DEEPSEEK"',
+  "deepseek-chat",
+  "deepseek-reasoner",
+  "deepseek-v4-pro",
+  "deepseek-flash",
+  "deepseek-v4-flash",
+  "platform.deepseek.com",
+  '"api.deepseek.com/v1"',
+  "deepseek_client",
+  "DeepSeekClient",
+  'DEEPSEEK_API_KEY filename:.env',
+  '"deepseek" filename:.env',
+  '"api.deepseek.com" filename:.env',
+  'DEEPSEEK_API_KEY filename:secrets.toml',
+  'DEEPSEEK_API_KEY filename:application.yml',
+  'DEEPSEEK_API_KEY filename:.env.local',
+  'DEEPSEEK_API_KEY filename:.env.production',
+  'DEEPSEEK_API_KEY filename:.env.development',
+  'DEEPSEEK_API_KEY filename:settings.py',
+  'DEEPSEEK_API_KEY filename:config.js',
+  'DEEPSEEK_API_KEY filename:config.ts',
+  'DEEPSEEK_API_KEY filename:appsettings.json',
+  'DEEPSEEK_API_KEY filename:secrets.yml',
+  'DEEPSEEK_API_KEY filename:local.properties',
+]
+max_pages_per_query = 10
+extensions = ["env", "py", "js", "ts", "json", "yml", "yaml", "toml", "ini", "conf", "sh"]
+extension_terms = ["DEEPSEEK_API_KEY", "deepseek_api_key", "DEEPSEEK_APIKEY"]
+extension_pages = 3
+languages = ["Python", "JavaScript", "TypeScript", "Go", "Java", "Rust", "PHP", "Ruby", "Shell", "Markdown", "JSON", "YAML"]
+language_terms = ["DEEPSEEK_API_KEY"]
+language_pages = 3
+size_terms = ["DEEPSEEK_API_KEY", "deepseek_api_key", "DEEPSEEK_APIKEY"]
+size_buckets = ["<100", "100..1000", "1000..5000", ">5000"]
+size_pages = 5
+compat_pages = 5
+compat_queries = [
+  '"OPENAI_API_KEY" "deepseek"',
+  '"base_url" "api.deepseek.com"',
+  '"deepseek-chat" "sk-"',
+  '"OPENAI_BASE_URL" "deepseek"',
+  '"api_key" "api.deepseek.com"',
+  '"--api-key" "sk-"',
+  '"--agent-api-key"',
+  '"api_key=" "sk-"',
+]
+generic_pages = 3
+generic_queries = [
+  '"sk-" filename:.env',
+  '"API_KEY=sk-"',
+  '"OPENAI_API_KEY" "sk-"',
+]
+cn_pages = 5
+cn_queries = [
+  '"密钥" "sk-"',
+  '"DeepSeek" "密钥"',
+  '"api.deepseek.com" "密钥"',
+  '"密钥" "api_key"',
+  '"DS_API_KEY"',
+  'filename:apikey "deepseek"',
+  'filename:credentials "deepseek"',
+]
+alternate_indexed_sort = true
+sweep_interval_seconds = 3600
+
+[events]
+poll_interval_seconds = 30
+pages = 3
+max_processed_shas = 100000
+patch_per_minute = 120
+
+[gists]
+poll_interval_seconds = 60
+pages = 2
+
+[grepapp]
+enabled = false
+interval_seconds = 7200
+requests_per_minute = 6
+[[grepapp.queries]]
+q = 'sk-[a-f0-9]{32}'
+regexp = true
+[[grepapp.queries]]
+q = 'DEEPSEEK_API_KEY'
+regexp = false
+
+[gharchive]
+enabled = true
+backfill_days = 7
+patch_per_minute = 150
+concurrency = 5
+signal_terms = ["deepseek", "DEEPSEEK_API_KEY", "api.deepseek.com", "sk-"]
+
+[urlscan]
+enabled = true
+api_key = ""
+interval_seconds = 21600
+
+[gitlab]
+enabled = false
+token = ""
+host = "https://gitlab.com"
+interval_seconds = 7200
+events_enabled = false
+events_poll_interval_seconds = 60
+
+[commit_search]
+enabled = true
+interval_seconds = 900
+lookback_days = 30
+pages = 3
+generic_pages = 3
+generic_queries = [
+  "add api key",
+  "update .env",
+  "add deepseek",
+  '"api key" env',
+]
+queries = [
+  "deepseek key",
+  "deepseek api key",
+  "deepseek apikey",
+  "deepseek token",
+  "deepseek secret",
+  "DEEPSEEK_API_KEY",
+  "api.deepseek.com",
+  "deepseek env",
+  "deepseek config",
+]
+
+[repo_search]
+enabled = true
+interval_seconds = 3600
+lookback_days = 90
+pages = 2
+queries = ["deepseek", "topic:deepseek", "deepseek in:readme"]
+
+[issue_search]
+enabled = true
+interval_seconds = 900
+lookback_days = 30
+pages = 3
+max_comment_fetches = 60
+queries = [
+  "DEEPSEEK_API_KEY",
+  '"api.deepseek.com"',
+  "deepseek_apikey",
+  "DEEPSEEK_API_KEY sk-",
+  "--agent-api-key",
+  '"--api-key" "api.deepseek.com"',
+  '"api_key" "api.deepseek.com"',
+  '"api.deepseek.com" "Bearer"',
+  '"api.deepseek.com" 报错',
+  '"密钥" "sk-"',
+  '"DeepSeek" "密钥"',
+  '"密钥" "api_key"',
+]
+
+[huggingface]
+enabled = true
+interval_seconds = 3600
+max_pages = 10
+token = ""
+queries = [
+  "api.deepseek.com",
+  "DEEPSEEK_API_KEY",
+  "deepseek_api_key",
+  "DEEPSEEK_BASE_URL",
+  "deepseek api key",
+  "deepseek_key",
+  "deepseek_token",
+  "deepseek_api",
+  "api key deepseek",
+]
+
+[stackexchange]
+enabled = true
+interval_seconds = 21600
+api_key = ""
+sites = ["stackoverflow"]
+queries = ["DEEPSEEK_API_KEY", "api.deepseek.com", "deepseek api key", "deepseek_apikey"]
+
+[dockerhub]
+enabled = true
+interval_seconds = 86400
+max_images = 60
+max_tags = 4
+queries = ["deepseek", "deepseek-api", "deepseek-llm"]
+
+[kaggle]
+enabled = true
+interval_seconds = 43200
+max_datasets = 60
+max_download_kb = 25000
+queries = ["deepseek", "deepseek api", "deepseek key"]
+username = ""
+key = ""
+notebooks = true
+max_notebooks = 30
+
+[openvsx]
+enabled = true
+interval_seconds = 43200
+max_extensions = 60
+max_download_kb = 25000
+queries = ["deepseek", "deepseek api"]
+
+[vscode_marketplace]
+enabled = true
+interval_seconds = 43200
+pages = 2
+page_size = 100
+max_extensions = 100
+max_download_kb = 25000
+queries = ["deepseek", "deepseek api"]
+
+[npm]
+enabled = true
+poll_interval_seconds = 60
+limit_per_poll = 200
+scan_terms = ["deepseek"]
+max_size_kb = 300
+max_size_kb_term = 5000
+max_download_kb = 25000
+
+[pypi]
+enabled = true
+poll_interval_seconds = 120
+scan_terms = ["deepseek"]
+max_size_kb = 300
+max_size_kb_term = 5000
+max_download_kb = 25000
+
+[clone]
+enabled = true
+max_concurrent = 3
+max_repo_size_mb = 500
+rescan_days = 7
+max_watchlist = 20000
+strong_content_regex = '(?i)(DEEPSEEK_API_KEY|api\.deepseek\.com)'
+
+[filters]
+denylist = []
+
+[limits]
+search_per_minute = 10
+gh_search_per_minute = 30
+core_per_hour = 4500
+validation_concurrency = 60
+raw_fetch_concurrency = 50

@@ -1,0 +1,12 @@
+config.toml
+findings.db
+findings.db-wal
+findings.db-shm
+*.log
+.venv/
+__pycache__/
+scanner.lock
+discord_import_report.csv
+.pytest_cache/
+*.csv
+RESTORE.txt.bak

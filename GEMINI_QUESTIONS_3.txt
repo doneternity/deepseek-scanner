@@ -1,0 +1,55 @@
+Hi again! You've been really helpful. A few more questions about finding
+exposed DeepSeek keys for responsible disclosure (finding them so owners can
+rotate, never using them). Some technical details would really help:
+
+1. For scanning the VS Code Marketplace (not Open VSX): what is the exact
+   request format for the gallery's extensionquery endpoint (headers, POST
+   body, pagination), and how do you construct the .vsix download URL for a
+   given publisher/extension/version? Is anonymous use permitted?
+
+2. Besides base64 obfuscation (e.g. atob("c2st...")), what other patterns do
+   developers accidentally use that hide API keys from plain regex scanners?
+   For example: string concatenation ("sk-" + "abc..."), hex encoding,
+   percent-encoding, reversed strings, keys split across lines or env var
+   indirection. Which of these are common enough to be worth detecting, and
+   what are reliable detection heuristics?
+
+3. Can deleted GitHub repositories or deleted files be recovered or searched
+   at scale? Specifically: does Software Heritage's public API support
+   full-text or content search (or only hash/lookup), and is the Wayback
+   Machine usable for recovering raw GitHub files like .env that are gone?
+
+4. What are the best *programmatic* ways to search Chinese developer
+   platforms (CSDN, Juejin, Gitee, Zhihu, WeChat articles) for leaked keys?
+   Do Gitee or GitCode have public code-search APIs? For web search, what
+   free/cheap options exist (Bing Web Search API tier, Google Programmable
+   Search, public SearXNG instances with JSON output), and what are the
+   quotas?
+
+5. Are there other high-yield public leak indexes we might be missing, for
+   example: indexes of exposed .env files or open S3 buckets (GrayHatWarfare
+   free features?), public "secret" datasets on Hugging Face or Kaggle, or
+   anything like the old searchcode.com?
+
+6. For Hugging Face's /api/search/full-text: what are the actual rate limits
+   anonymous vs with a token? Does it index the contents of dataset files and
+   model card READMEs, or only Space application code?
+
+7. For DeepSeek specifically: does GET /models with a valid key also confirm
+   validity (vs only /user/balance)? And when a key returns 403 (valid but
+   restricted/suspended), can that state ever reverse (e.g. after an unpaid
+   invoice is settled), i.e. is it worth re-checking restricted keys later?
+
+8. Is there any public data on how quickly DeepSeek revokes or drains keys
+   after exposure, and what fraction of discovered DeepSeek keys are still
+   active in typical scans?
+
+9. Are there any public feeds or datasets that aggregate newly exposed API
+   keys in near real-time (legitimate threat-intel style feeds), similar to
+   what GitHub secret scanning does but for non-GitHub platforms?
+
+10. Anything you'd recommend adding to a disclosure workflow for keys found
+    on robots/pastes/documents that are NOT on GitHub and have no obvious
+    owner contact? (platform abuse reports vs registry contacts, etc.)
+
+Thanks so much!

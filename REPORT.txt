@@ -1,0 +1,417 @@
+================================================================================
+DEEPSEEK API KEY LEAK SCANNER - FULL REPORT
+================================================================================
+Location: /home/rskll/scanner/deepseek-scanner
+Language: Python 3.12 (asyncio), SQLite, Rich TUI
+Purpose:  Continuously discover exposed DeepSeek API keys across public sources,
+          verify them against the DeepSeek API for free, and alert the operator
+          via Discord so the owners can be contacted (defensive disclosure).
+
+--------------------------------------------------------------------------------
+1. WHAT IT DOES (HIGH LEVEL)
+--------------------------------------------------------------------------------
+
+The scanner continuously watches many public sources for leaked DeepSeek API
+keys (format: "sk-" followed by 32 hex characters, e.g.
+sk-0123456789abcdef0123456789abcdef). When a candidate is found it is:
+
+  1. Extracted from the source content using a configurable regex.
+  2. Filtered (placeholder/low-entropy/denylist checks, Shannon entropy).
+  3. Deduplicated by SHA-256 hash of the key in a local SQLite database.
+  4. Verified against the DeepSeek /user/balance endpoint (zero token cost).
+  5. Converted to EUR using live FX rates.
+  6. Notified to a private Discord channel via webhook according to the
+     balance policy (currently min_balance_eur = 0.0, meaning any key with a
+     positive EUR-equivalent balance; can instead be a fixed EUR threshold or
+     "all authenticated keys").
+  7. Periodically re-verified so that previously drained accounts which get
+     topped up are caught later.
+
+Fresh leaks (found in real-time streams) are prioritized over old indexed code.
+Note: DeepSeek is NOT part of GitHub's secret-scanning partner program, so
+keys pushed publicly are not automatically revoked there; off-GitHub platforms
+(Hugging Face, Docker Hub, public .env files, Kaggle, Open VSX) are where
+keys tend to survive longest.
+
+--------------------------------------------------------------------------------
+2. DISCOVERY SOURCES (ENGINES)
+--------------------------------------------------------------------------------
+
+2.1 GitHub Code Search (search_engine.py)
+    - Uses the GitHub REST /search/code endpoint (10 requests/min per token).
+    - Runs configurable query groups:
+        * Literal anchor queries (env var names, model names, API URLs).
+        * Extension fan-out  (DEEPSEEK_API_KEY extension:py, :env, :yml, ...).
+        * Language fan-out   (DEEPSEEK_API_KEY language:Python, ...).
+        * Size-bucket slicing (size:<100, 100..1000, 1000..5000, >5000).
+        * Filename queries   (filename:.env, secrets.toml, appsettings.json).
+        * Compatibility queries ("OPENAI_API_KEY" "deepseek",
+          "base_url" "api.deepseek.com", etc.).
+        * Generic harvest queries ("sk-" filename:.env, "API_KEY=sk-", ...).
+        * Chinese-language queries ("密钥" "sk-", "DeepSeek" "密钥", ...).
+    - File contents are fetched from raw.githubusercontent.com (unrated CDN)
+      and regex-scanned locally; SHA-based skip avoids re-downloading
+      unchanged files. Alternating sweeps use sort=indexed for fresh files.
+    - One concurrent worker per configured GitHub token.
+
+2.2 GitHub Events Stream (events_engine.py)
+    - Polls 3 pages of /events (up to 300 events per poll) every 30s, with
+      per-page ETag caching (304s free). GitHub's public feed is sampled, so
+      multiple pages increase coverage.
+    - For every PushEvent, fetches the FULL push diff for free from
+      github.com/{repo}/compare/{before}...{head}.diff (unrated web endpoint).
+    - Author name/email is extracted lazily from the commit patch header only
+      when a candidate is found.
+
+2.3 GitHub Gists (gist_engine.py)
+    - Polls /gists/public (paginated concurrently, ETag-cached), fetches raw
+      gist contents from the CDN and scans them.
+
+2.4 GH Archive (gharchive.py)
+    - Downloads historical hourly event files from data.gharchive.org
+      (no auth, no API quota), filters PushEvents whose payload mentions
+      signal terms (case-insensitive), and scans each matching push via the
+      free compare.diff endpoint.
+    - Modes: resumable backfill (default 7 days, newest-first) and continuous
+      monotonic hour-cursor following with per-file completion tracking.
+
+2.5 GitHub Commit-Message Search (gh_search_engine.py)
+    - /search/commits (separate 30 requests/min bucket) with date-sliced
+      queries; every matching commit is scanned via its free .patch file.
+    - Includes generic "key-adding" message queries ("add api key",
+      "update .env", "add deepseek", "api key" env) that catch leaks in
+      repositories with no DeepSeek branding.
+
+2.6 GitHub Repository Search (gh_search_engine.py)
+    - /search/repositories finds freshly pushed DeepSeek-related repos and
+      adds them to the clone watchlist (capped, strong-signal gated).
+
+2.7 Git History Clones (clone_engine.py)
+    - Watchlist repos are partially cloned (--filter=blob:none) and searched
+      across ALL revisions with git grep, finding keys committed and later
+      removed. git log -S recovers the introducing commit and author.
+    - Guards: max repo size, 3 concurrent, failure counting (3 strikes),
+      7-day rescan period.
+
+2.8 GitHub Issue/PR Search (issue_search_engine.py)
+    - /search/issues with text-match fragments; bodies and budgeted comments
+      are scanned. Leaked keys are frequently pasted into issues and PRs.
+    - Includes CLI-flag queries ("--agent-api-key", "--api-key") and
+      Chinese-language queries ("密钥" "sk-", "api.deepseek.com" 报错).
+    - Proven channel: the first funded key (EUR 14.00) was found here in a
+      same-day issue that pasted a full command line containing
+      "--agent-api-key sk-...". GitHub's secret scanning does not
+      auto-revoke DeepSeek keys, so pasted keys persist in issues.
+
+2.9 Hugging Face Full-Text Search (hf_engine.py)
+    - Queries huggingface.co/api/search/full-text (public; optional token for
+      higher limits) across Spaces, datasets and models for many DeepSeek
+      terms. Extracts keys from search fragments; falls back to raw file
+      fetch; unchanged files skipped via updatedAt. Highest-yield channel.
+
+2.10 npm Registry (npm_engine.py)
+    - Follows the live npm changes feed (replicate.npmjs.com) with a
+      revision-level dedupe cache, downloads newly published package tarballs
+      (hard 25 MB cap) and scans all text files inside.
+
+2.11 PyPI (pypi_engine.py)
+    - Follows the PyPI XML-RPC release changelog (monotonic serial cursor),
+      downloads sdists/wheels (hard 25 MB cap), scans archives AND package
+      descriptions.
+
+2.12 GitLab (gitlab_engine.py, gitlab_events_engine.py) - optional
+    - Blob search across public GitLab (free personal access token) and the
+      public push-event stream with per-push compare diffs.
+
+2.13 Docker Hub (dockerhub_engine.py) - scans the config blobs (ENV and
+     build history) of several recent tags per image, not just latest.
+
+2.14 urlscan.io (urlscan_engine.py)
+    - Searches for scanned pages that served .env files, downloads stored
+      response bodies and scans them (public .env exposures).
+
+2.14 Kaggle (kaggle_engine.py)
+    - Anonymous dataset search/download (hard 25 MB cap) and archive scan.
+
+2.15 Open VSX (openvsx_engine.py)
+    - Searches Open VSX extensions, downloads VSIX archives and scans them;
+      extensions frequently bundle .env files and hardcoded keys.
+
+2.16 VS Code Marketplace (vscode_marketplace_engine.py)
+    - Queries the public gallery extensionquery API anonymously, downloads
+      VSIX archives and scans them for keys. Verified productive on the
+      first live sweep (100 extensions inspected).
+
+2.17 grep.app (grep_engine.py) - optional, disabled by default (bot-blocked)
+
+--------------------------------------------------------------------------------
+3. EXTRACTION AND FILTERING
+--------------------------------------------------------------------------------
+
+  - key_regex (config): default 'sk-[a-f0-9]{32}\b'.
+  - Multi-encoding extraction: plaintext, base64 blobs (atob/b64decode),
+    string concatenation ("sk-" + "..."), hex escapes (\xNN...), raw hex
+    strings, percent-encoding, and reversed keys are all decoded before
+    matching.
+  - Placeholder filter: keys with <= 2 distinct characters, or Shannon
+    entropy below 2.5 bits/char over the key body, are skipped
+    (sk-0000..., sk-ababab..., sk-abcabc...).
+  - Denylist: explicit keys can be excluded via filters.denylist.
+  - Candidates are deduplicated in SQLite by SHA-256 of the key.
+  - Real-time sources feed a HOT validation queue; indexed sources feed a
+    COLD queue. Validation always drains HOT first.
+
+--------------------------------------------------------------------------------
+4. VERIFICATION (validator.py, fx.py)
+--------------------------------------------------------------------------------
+
+  - Endpoint: GET https://api.deepseek.com/user/balance with the key as a
+    Bearer token (zero token cost, no generation charges).
+  - HTTP 200  -> key authenticates; balances parsed (amount + currency).
+  - HTTP 401  -> definitively invalid (dead/revoked key).
+  - HTTP 403  -> discriminator probe: a dummy key is tested once; if the
+                 dummy also gets 403 it is an IP-level block (defer/retry),
+                 otherwise the key itself is valid but restricted
+                 (suspension/IP/geo) and is recorded as valid.
+  - HTTP 429  -> exponential backoff and retry.
+  - Transient errors defer the candidate; it stays "new" and is retried.
+  - Balances converted to EUR with live rates (6h cache + fallback table).
+  - Notification policy (validation_loop):
+      * min_balance_eur > 0  -> notify when EUR balance >= threshold
+      * min_balance_eur = 0  -> notify only when EUR balance is positive
+                                (the current configuration: "any funded key")
+      * notify_all_valid     -> notify every authenticated key, including
+                                zero and negative balances
+  - Below-threshold keys are re-verified every
+    revalidate_below_threshold_hours (default 48h) to catch topped-up
+    accounts. Keys that authenticated but failed Discord delivery are
+    re-queued after 1 hour.
+  - Validation concurrency: limits.validation_concurrency (default 60).
+
+--------------------------------------------------------------------------------
+5. NOTIFICATION (notifier.py)
+--------------------------------------------------------------------------------
+
+  - Discord webhook embeds:
+      Title:  DEEPSEEK - VALID - balance in EUR (plus key count if grouped)
+      Fields: Balance (EUR), Key (full value), Repo, Found via (source),
+              File, Author email, Source link
+  - Keys from the same repository found within a 2-second window are grouped
+    into one message. Key fields are chunked below Discord's 1,024-character
+    limit and split across up to 10 embeds per message; larger groups are
+    sent as multiple messages. Send rate is throttled (2.5/s) with retries.
+
+--------------------------------------------------------------------------------
+6. STORAGE (storage.py, SQLite)
+--------------------------------------------------------------------------------
+
+  Tables (findings.db, WAL mode):
+    findings      key_hash (unique), key, repo, file_path, commit_url,
+                  author_name, author_email, source, status, balance,
+                  found_at, notified_at, validated_at
+                  status: new -> invalid | below_threshold | valid -> notified
+    kv            engine cursors and state (ETags, cursors, sweep parity...)
+    seen_files    repo+path -> content sha/version (skip unchanged files)
+    seen_shas     processed commit SHAs (cross-engine dedupe, capped at 100k)
+    seen_gists    gist id -> updated_at
+    watchlist     repos to clone-scan (size, added_at, last_scanned,
+                  fail_count)
+
+--------------------------------------------------------------------------------
+7. TERMINAL UI (ui.py)
+--------------------------------------------------------------------------------
+
+  - Rich live panel, refreshed 4x/second, showing:
+      Status line: candidates, valid, notified, invalid, skipped, errors
+      Search:      current query, page, results, search-API remaining
+      Engines:     events, gists, grep.app, history, archive, web/other,
+                   registries, GH API, other (HF/StackOverflow/Docker/
+                   Kaggle/OpenVSX)
+      Stale row:   engines silent beyond max(5 min, 2.5x their interval)
+      Recent findings table and a live log tail
+  - Logs: scanner.log (rotating 10 MB x 3), errors.log (ERROR+ only),
+    plus a live error counter in the UI.
+
+--------------------------------------------------------------------------------
+8. RELIABILITY FEATURES
+--------------------------------------------------------------------------------
+
+  - Every engine runs under a supervisor that logs crashes and restarts it.
+  - Unhandled asyncio task exceptions are captured with full tracebacks.
+  - Graceful shutdown on SIGINT/SIGTERM with notification flush.
+  - HTTP/2 with a 200-connection pool; per-API token buckets prevent abuse.
+  - Multiple GitHub tokens: one search bucket (10/min), core bucket (5,000/h)
+    and search-API bucket (30/min) per token; engines rotate automatically.
+  - Heartbeat watchdog exposes stalled engines in the TUI.
+  - Persisted ETags/cursors minimize API usage; conditional requests are free.
+
+--------------------------------------------------------------------------------
+9. CONFIGURATION (config.toml)
+--------------------------------------------------------------------------------
+
+  Top level: github_tokens[], discord_webhook_url, key_regex, min_balance_eur,
+             notify_all_valid, revalidate_below_threshold_hours
+  [fx]            EUR conversion API and cache TTL
+  [search]        queries, extensions, languages, size buckets,
+                  compat_queries, generic_queries, sweep timing
+  [events]        poll interval, pages, patch rate, processed-SHA cap
+  [gists]         poll interval, pages
+  [grepapp]       optional regex index (disabled)
+  [gharchive]     backfill days, concurrency, patch rate, signal terms
+  [urlscan]       web .env scan
+  [gitlab]        optional search + events (needs token)
+  [npm]/[pypi]    registry polling, scan terms, size/download caps
+  [clone]         concurrency, max repo size, rescan period, watchlist cap,
+                  strong-content regex
+  [commit_search] message queries, lookback, pages, interval
+  [repo_search]   repo queries, lookback, pages, interval
+  [issue_search]  issue queries, lookback, pages, comment budget
+  [huggingface]   queries, pages, interval, optional token
+  [stackexchange] queries, sites, interval, optional API key
+  [dockerhub]     queries, max images, interval
+  [kaggle]        queries, max datasets, download cap, interval
+  [openvsx]       queries, max extensions, download cap, interval
+  [filters]       denylist
+  [limits]        per-API rate limits and worker concurrency
+
+--------------------------------------------------------------------------------
+10. COMMAND LINE
+--------------------------------------------------------------------------------
+
+  python3 main.py                 Run the scanner with the live TUI (daemon).
+  python3 main.py --no-tui        Plain log output (for systemd/cron).
+  python3 main.py --once          One pass over all sources, then exit.
+  python3 main.py --fast --once   Reduced sweep for quick smoke tests.
+  python3 main.py --once --backfill N
+                                  Also backfill N days of GH Archive.
+  python3 main.py --stats         Print a findings summary from the database.
+  python3 main.py --verbose       Debug logging.
+
+  Deployment helpers: deploy/scanner.service (systemd),
+                      deploy/crontab.example (scheduled runs).
+  Discord history import: tools/discord_import.py extracts keys from a
+  channel's old scanner webhooks (bot token, user token, or a
+  DiscordChatExporter JSON export), validates them and writes a CSV report:
+      python3 tools/discord_import.py --token BOT_TOKEN --channel CHANNEL_ID
+      python3 tools/discord_import.py --export-json export.json [--notify]
+  Requirements: httpx, h2, rich (requirements.txt).
+
+--------------------------------------------------------------------------------
+11. TESTS
+--------------------------------------------------------------------------------
+
+  tests/test_scanner.py - 71+ tests covering: query building, filters and
+  entropy, validator parsing/status codes/403 discrimination, FX conversion,
+  embed building/chunking, storage (kv, dedupe, cursors, watchlist), diff
+  parsing and scanning, GH Archive filtering and cursors, events multi-page
+  polling, parallel search sweeps, notification grouping, token pools,
+  heartbeats, and all registry/web source parsers (HF, Kaggle, Open VSX,
+  Docker Hub, StackExchange, issue search, npm, pypi).
+
+  Run: python3 -m pytest tests/ -q
+
+--------------------------------------------------------------------------------
+12. MODULE MAP
+--------------------------------------------------------------------------------
+
+  main.py                       Orchestration, config, CLI, logging, queues
+  scanner/search_engine.py      GitHub code search
+  scanner/events_engine.py      GitHub push events (multi-page)
+  scanner/gist_engine.py        GitHub gists
+  scanner/gharchive.py          GH Archive backfill/continuous
+  scanner/gh_search_engine.py   Commit-message and repository search
+  scanner/issue_search_engine.py GitHub issues/PRs
+  scanner/hf_engine.py          Hugging Face full-text search
+  scanner/npm_engine.py         npm registry monitor
+  scanner/pypi_engine.py        PyPI monitor
+  scanner/clone_engine.py       Git history clone scanner
+  scanner/gitlab_engine.py      GitLab blob search (optional)
+  scanner/gitlab_events_engine.py GitLab push events (optional)
+  scanner/urlscan_engine.py     urlscan.io .env search
+  scanner/grep_engine.py        grep.app (optional, disabled)
+  scanner/dockerhub_engine.py   Docker Hub image config scanner (multi-tag)
+  scanner/stackexchange_engine.py StackExchange excerpts
+  scanner/kaggle_engine.py      Kaggle dataset scanner
+  scanner/openvsx_engine.py     Open VSX extension scanner
+  scanner/vscode_marketplace_engine.py  VS Code Marketplace scanner
+  scanner/diffscan.py           Shared free-diff fetching (compare/patch)
+  scanner/pkgscan.py            Archive scanning (tar/zip)
+  scanner/validator.py          DeepSeek balance verification
+  scanner/fx.py                 EUR conversion
+  scanner/notifier.py           Discord webhook delivery
+  scanner/storage.py            SQLite persistence
+  scanner/tokens.py             Multi-token pools
+  scanner/ratelimit.py          Token buckets
+  scanner/filters.py            Placeholder/entropy filtering
+  scanner/ui.py                 TUI, stats, heartbeat watchdog
+
+--------------------------------------------------------------------------------
+13. EXPECTED RESULTS AND KNOWN LIMITS
+--------------------------------------------------------------------------------
+
+  - Volume: on the order of 100-300 candidate keys per day across all sources;
+    roughly a third of candidates authenticate against DeepSeek.
+  - Most authenticated keys expose drained accounts (0.00 or negative
+    balances); only a small fraction ever carries a balance over the
+    notification threshold.
+  - DeepSeek is not in GitHub's secret-scanning partner program: keys pushed
+    publicly are not auto-revoked there, so GitHub sources do yield real keys.
+    Off-GitHub platforms (HF, public .env, Docker, Kaggle, Open VSX) tend to
+    yield keys that survive longer.
+  - Hard limits: GitHub code search is capped at 10 requests/min per token;
+    the public events feed is sampled and capped (we poll 3 pages = up to 300
+    events); GH Archive files appear roughly an hour after the hour.
+
+--------------------------------------------------------------------------------
+14. KAGGLE NOTEBOOKS (OPTIONAL, NEEDS FREE CREDENTIALS)
+--------------------------------------------------------------------------------
+
+  Kaggle notebook scanning is gated on credentials:
+    1. Create a free account at kaggle.com
+    2. Settings -> API -> Create New Token (downloads kaggle.json)
+    3. Put the "username" and "key" values into [kaggle] in config.toml
+  With credentials set, the engine lists notebooks matching DeepSeek terms
+  and scans their source for keys. Datasets work anonymously regardless.
+
+--------------------------------------------------------------------------------
+15. DISCLOSURE AND REMEDIATION GUIDANCE (FOR OWNER OUTREACH)
+--------------------------------------------------------------------------------
+
+  When notifying owners of an exposed key, the following industry-standard
+  advice applies:
+
+  Rotate immediately with dual-key overlap:
+    1. Generate a new key (Key B) while the old key (Key A) is still active.
+    2. Deploy Key B to all runtime environments (secrets manager or env vars).
+    3. Verify traffic has moved to Key B (provider usage logs / dashboards).
+    4. Revoke Key A.
+    Overlap windows of 24-72 hours avoid downtime during rotation.
+
+  Purging Git history:
+    - Deleting the line in a new commit does NOT remove the secret; it stays
+      in history and remains discoverable.
+    - Use git-filter-repo or BFG Repo-Cleaner to purge the string across all
+      historical trees, then force-push and coordinate with collaborators.
+    - Once a plaintext key has reached a public remote, it must be assumed
+      fully compromised regardless of how quickly it is removed.
+
+  Preventative controls:
+    - Pre-commit hooks (pre-commit + gitleaks) to block commits containing
+      credential patterns or high-entropy strings.
+    - Centralized secret stores (HashiCorp Vault, AWS Secrets Manager,
+      Doppler) with runtime injection instead of committed .env files.
+    - Provider-side IP / referrer whitelisting so a leaked key cannot be
+      used from unauthorized networks even if exposed.
+
+  Reporting channels:
+    - On GitHub, prefer the repository's SECURITY.md or a private security
+      advisory; do not open a public issue containing the key.
+    - Off-GitHub (Hugging Face, Docker Hub, Kaggle, pastes), use the
+      platform's abuse/trust-and-safety reporting or contact the owner via
+      commit metadata, profile contact details, or WHOIS where appropriate.
+    - Verify the key state (this scanner does so automatically) but never use
+      the key beyond that check, and keep full values out of public channels.
+
+================================================================================
+END OF REPORT
+================================================================================

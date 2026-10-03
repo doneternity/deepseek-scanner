@@ -1,0 +1,14 @@
+[Unit]
+Description=DeepSeek Key Leak Scanner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rskll/scanner/deepseek-scanner
+ExecStart=/usr/bin/python3 main.py --no-tui
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
